@@ -1,0 +1,147 @@
+package middleware
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/Kara4ev/go-web-tmp/internal/model/apperrors"
+	"github.com/Kara4ev/go-web-tmp/pkg/logger"
+	"github.com/gin-gonic/gin"
+)
+
+func Timeout(timeout time.Duration, errTimeout *apperrors.Error) gin.HandlerFunc {
+
+	return func(c *gin.Context) {
+		logger.Debug("middleware Timeout execute")
+		tw := &timeoutWriter{
+			ResponseWriter: c.Writer,
+			h:              make(http.Header),
+		}
+
+		c.Writer = tw
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+
+		c.Request = c.Request.WithContext(ctx)
+
+		finishChan := make(chan struct{})
+		panicChan := make(chan interface{}, 1)
+
+		go func() {
+			defer func() {
+				if p := recover(); p != nil {
+					panicChan <- p
+				}
+			}()
+
+			c.Next()
+			finishChan <- struct{}{}
+		}()
+
+		select {
+		case <-panicChan:
+			logger.Debug("middleware Timeout: panic!")
+			e := apperrors.NewInternal()
+			tw.ResponseWriter.WriteHeader(e.Status())
+			eResp, _ := json.Marshal(gin.H{
+				"error": e,
+			})
+			tw.ResponseWriter.Write(eResp)
+		case <-finishChan:
+			logger.Debug("middleware Timeout: finish")
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+
+			dst := tw.ResponseWriter.Header()
+
+			for k, vv := range tw.Header() {
+				dst[k] = vv
+			}
+			tw.ResponseWriter.WriteHeader(tw.code)
+			tw.ResponseWriter.Write(tw.wbuf.Bytes())
+		case <-ctx.Done():
+			logger.Debug("middleware Timeout: timeout!")
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+			tw.ResponseWriter.Header().Set("Content-Type", "application/json")
+			tw.ResponseWriter.WriteHeader(errTimeout.Status())
+			eResp, _ := json.Marshal(gin.H{
+				"error": errTimeout,
+			})
+			tw.ResponseWriter.Write(eResp)
+			c.Abort()
+			tw.SetTimedOut()
+		}
+
+	}
+}
+
+// implements http.Writer, but tracks if Writer has timed out
+// or has already written its header to prevent
+// header and body overwrites
+// also locks access to this writer to prevent race conditions
+// holds the gin.ResponseWriter which we'll manually call Write()
+// on in the middleware function to send response
+type timeoutWriter struct {
+	gin.ResponseWriter
+	h    http.Header
+	wbuf bytes.Buffer // The zero value for Buffer is an empty buffer ready to use.
+
+	mu          sync.Mutex
+	timedOut    bool
+	wroteHeader bool
+	code        int
+}
+
+// Writes the response, but first makes sure there
+// hasn't already been a timeout
+// In http.ResponseWriter interface
+func (tw *timeoutWriter) Write(b []byte) (int, error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	if tw.timedOut {
+		return 0, nil
+	}
+
+	return tw.wbuf.Write(b)
+}
+
+// In http.ResponseWriter interface
+func (tw *timeoutWriter) WriteHeader(code int) {
+	checkWriteHeaderCode(code)
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	// We do not write the header if we've timed out or written the header
+	if tw.timedOut || tw.wroteHeader {
+		return
+	}
+	tw.writeHeader(code)
+}
+
+// set that the header has been written
+func (tw *timeoutWriter) writeHeader(code int) {
+	tw.wroteHeader = true
+	tw.code = code
+}
+
+// Header "relays" the header, h, set in struct
+// In http.ResponseWriter interface
+func (tw *timeoutWriter) Header() http.Header {
+	return tw.h
+}
+
+// SetTimeOut sets timedOut field to true
+func (tw *timeoutWriter) SetTimedOut() {
+	tw.timedOut = true
+}
+
+func checkWriteHeaderCode(code int) {
+	if code < 100 || code > 999 {
+		panic(fmt.Sprintf("invalid WriteHeader code %v", code))
+	}
+}

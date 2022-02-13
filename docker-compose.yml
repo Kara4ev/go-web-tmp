@@ -1,0 +1,51 @@
+version: "3.8"
+services:
+  reverse-proxy:
+    image: traefik:v2.2
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker"
+      - "--providers.docker.exposedByDefault=false"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+  postgresql:
+    image: "postgres:alpine"
+    environment:
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - "pgdata:/var/lib/postgresql/data"
+    command: ["postgres", "-c", "log_statement=all"]
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - "redisdata:/data"
+  backend:
+    build:
+      context: ./backend
+      target: builder
+    image: backend
+    expose:
+      - "8080"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.account.rule=Host(`malcorp.test`) && PathPrefix(`/api/account`)"
+    environment:
+      - ENV=dev
+    volumes:
+      - ./backend:/go/src/app
+    depends_on:
+      - postgresql
+      - redis
+    env_file:
+      - ./backend/.env.dev
+    command: reflex -r "\.go$$" -s -- sh -c "go run ./cmd/app/"
+volumes:
+  pgdata: 
+  redisdata:

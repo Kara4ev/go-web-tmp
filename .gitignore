@@ -1,0 +1,6 @@
+.vscode
+*.code-workspace
+.env.dev
+*.pem
+logs
+*.log

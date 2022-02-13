@@ -1,0 +1,34 @@
+app:
+  name: "Go TDS"
+  version: "0.0.1"
+  debug: 1
+  secret: "secret"
+  privat_key_file: "./rsa_private.pem"
+  pub_key_file: "./rsa_public.pem"
+  log_file: "./logs/app.log"
+  refresh_token_exp: 259200 # 3 day
+  id_token_exp: 900 # 15 min
+
+http:
+  host: "0.0.0.0"
+  port: "8080"
+  base_url: "/api/account/"
+  hendler_time_out: 5
+
+logger:
+  level: "debug"
+
+postgres:
+  host: "localhost"
+  port: "5432"
+  user: "postgres"
+  password: "password"
+  db: "gotds"
+  ssl: "disable"
+
+redis:
+  host: "localhost"
+  port: "6379"
+  password: "redis"
+  db: 0
+
